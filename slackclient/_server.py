@@ -9,6 +9,11 @@ import json
 
 
 class Server(object):
+    '''
+    The Server object owns the websocket connection and all attached channel information.
+
+
+    '''
     def __init__(self, token, connect=True):
         self.token = token
         self.username = None
@@ -19,6 +24,7 @@ class Server(object):
         self.channels = SearchList()
         self.connected = False
         self.pingcounter = 0
+        self.ws_url = None
         self.api_requester = SlackRequest()
 
         if connect:
@@ -30,7 +36,25 @@ class Server(object):
         else:
             return False
 
+    def __hash__(self):
+        return hash(self.token)
+
     def __str__(self):
+        '''
+        Example Output::
+
+        username : None
+        domain : None
+        websocket : None
+        users : []
+        login_data : None
+        api_requester : <slackclient._slackrequest.SlackRequest
+        pingcounter : 0
+        channels : []
+        token : xoxb-asdlfkyadsofii7asdf734lkasdjfllakjba7zbu
+        connected : False
+        ws_url : None
+        '''
         data = ""
         for key in list(self.__dict__.keys()):
             data += "{} : {}\n".format(key, str(self.__dict__[key])[:40])
@@ -41,10 +65,10 @@ class Server(object):
 
     def rtm_connect(self, reconnect=False):
         reply = self.api_requester.do(self.token, "rtm.start")
-        if reply.code != 200:
+        if reply.status_code != 200:
             raise SlackConnectionError
         else:
-            login_data = json.loads(reply.read().decode('utf-8'))
+            login_data = reply.json()
             if login_data["ok"]:
                 self.ws_url = login_data['url']
                 if not reconnect:
@@ -88,7 +112,14 @@ class Server(object):
             self.attach_user(user["name"], user["id"], user["real_name"], user["tz"])
 
     def send_to_websocket(self, data):
-        """Send (data) directly to the websocket."""
+        """
+        Send a JSON message directly to the websocket. See
+        `RTM documentation <https://api.slack.com/rtm` for allowed types.
+
+        :Args:
+            data (dict) the key/values to send the websocket.
+
+        """
         try:
             data = json.dumps(data)
             self.websocket.send(data)
@@ -106,7 +137,7 @@ class Server(object):
         data = ""
         while True:
             try:
-                data += "{}\n".format(self.websocket.recv())
+                data += "{0}\n".format(self.websocket.recv())
             except SSLError as e:
                 if e.errno == 2:
                     # errno 2 occurs when trying to read or write data, but more
@@ -119,21 +150,58 @@ class Server(object):
                 raise
             return data.rstrip()
 
-    def attach_user(self, name, id, real_name, tz):
-        if self.users.find(id) is None:
-            self.users.append(User(self, name, id, real_name, tz))
+    def attach_user(self, name, channel_id, real_name, tz):
+        if self.users.find(channel_id) is None:
+            self.users.append(User(self, name, channel_id, real_name, tz))
 
-    def attach_channel(self, name, id, members=[]):
-        if self.channels.find(id) is None:
-            self.channels.append(Channel(self, name, id, members))
+    def attach_channel(self, name, channel_id, members=None):
+        if members is None:
+            members = []
+        if self.channels.find(channel_id) is None:
+            self.channels.append(Channel(self, name, channel_id, members))
 
     def join_channel(self, name):
-        print(self.api_requester.do(self.token,
-                                    "channels.join?name={}".format(name)).read())
+        '''
+        Join a channel by name.
+
+        Note: this action is not allowed by bots, they must be invited to channels.
+        '''
+        return self.api_requester.do(
+            self.token,
+            "channels.join?name={}".format(name)
+        ).text
 
     def api_call(self, method, **kwargs):
-        reply = self.api_requester.do(self.token, method, kwargs)
-        return reply.read()
+        '''
+        Call the Slack Web API as documented here: https://api.slack.com/web
+
+        :Args:
+            method (str): The API Method to call. See here for a list: https://api.slack.com/methods
+        :Kwargs:
+            (optional) kwargs: any arguments passed here will be bundled and sent to the api
+            requester as post_data
+                and will be passed along to the API.
+
+        Example::
+
+            sc.server.api_call(
+                "channels.setPurpose",
+                channel="CABC12345",
+                purpose="Writing some code!"
+            )
+
+        Returns:
+            str -- returns the text of the HTTP response.
+
+            Examples::
+
+                u'{"ok":true,"purpose":"Testing bots"}'
+                or
+                u'{"ok":false,"error":"channel_not_found"}'
+
+            See here for more information on responses: https://api.slack.com/web
+        '''
+        return self.api_requester.do(self.token, method, kwargs).text
 
 
 class SlackConnectionError(Exception):

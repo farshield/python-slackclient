@@ -1,22 +1,25 @@
 class User(object):
-    def __init__(self, server, name, id, real_name, tz):
+    def __init__(self, server, name, user_id, real_name, tz):
         self.tz = tz
         self.name = name
         self.real_name = real_name
         self.server = server
-        self.id = id
+        self.id = user_id
 
     def __eq__(self, compare_str):
-        if self.id == compare_str or self.name == compare_str:
+        if compare_str in (self.id, self.name):
             return True
         else:
             return False
+
+    def __hash__(self):
+        return hash(self.id)
 
     def __str__(self):
         data = ""
         for key in list(self.__dict__.keys()):
             if key != "server":
-                data += "{} : {}\n".format(key, str(self.__dict__[key])[:40])
+                data += "{0} : {1}\n".format(key, str(self.__dict__[key])[:40])
         return data
 
     def __repr__(self):
