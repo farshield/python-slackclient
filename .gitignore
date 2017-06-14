@@ -11,6 +11,6 @@ env
 0/
 tests/.cache
 .coverage
-docs/_build
-docs/_static
-docs/_templates
+.cache
+.DS_Store
+.ropeproject

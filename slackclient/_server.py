@@ -1,7 +1,8 @@
 from slackclient._slackrequest import SlackRequest
+from requests.packages.urllib3.util.url import parse_url
 from slackclient._channel import Channel
 from slackclient._user import User
-from slackclient._util import SearchList
+from slackclient._util import SearchList, SearchDict
 from ssl import SSLError
 
 from websocket import create_connection
@@ -14,18 +15,18 @@ class Server(object):
 
 
     '''
-    def __init__(self, token, connect=True):
+    def __init__(self, token, connect=True, proxies=None):
         self.token = token
         self.username = None
         self.domain = None
         self.login_data = None
         self.websocket = None
-        self.users = SearchList()
+        self.users = SearchDict()
         self.channels = SearchList()
         self.connected = False
-        self.pingcounter = 0
         self.ws_url = None
-        self.api_requester = SlackRequest()
+        self.proxies = proxies
+        self.api_requester = SlackRequest(proxies=proxies)
 
         if connect:
             self.rtm_connect()
@@ -49,7 +50,6 @@ class Server(object):
         users : []
         login_data : None
         api_requester : <slackclient._slackrequest.SlackRequest
-        pingcounter : 0
         channels : []
         token : xoxb-asdlfkyadsofii7asdf734lkasdjfllakjba7zbu
         connected : False
@@ -63,8 +63,11 @@ class Server(object):
     def __repr__(self):
         return self.__str__()
 
-    def rtm_connect(self, reconnect=False):
-        reply = self.api_requester.do(self.token, "rtm.start")
+    def append_user_agent(self, name, version):
+        self.api_requester.append_user_agent(name, version)
+
+    def rtm_connect(self, reconnect=False, timeout=None):
+        reply = self.api_requester.do(self.token, "rtm.start", timeout=timeout)
         if reply.status_code != 200:
             raise SlackConnectionError
         else:
@@ -87,11 +90,23 @@ class Server(object):
         self.parse_user_data(login_data["users"])
 
     def connect_slack_websocket(self, ws_url):
+        """Uses http proxy if available"""
+        if self.proxies and 'http' in self.proxies:
+            parts = parse_url(self.proxies['http'])
+            proxy_host, proxy_port = parts.host, parts.port
+            auth = parts.auth
+            proxy_auth = auth and auth.split(':')
+        else:
+            proxy_auth, proxy_port, proxy_host = None, None, None
+
         try:
-            self.websocket = create_connection(ws_url)
+            self.websocket = create_connection(ws_url,
+                                               http_proxy_host=proxy_host,
+                                               http_proxy_port=proxy_port,
+                                               http_proxy_auth=proxy_auth)
             self.websocket.sock.setblocking(0)
-        except:
-            raise SlackConnectionError
+        except Exception as e:
+            raise SlackConnectionError(str(e))
 
     def parse_channel_data(self, channel_data):
         for channel in channel_data:
@@ -150,9 +165,8 @@ class Server(object):
                 raise
             return data.rstrip()
 
-    def attach_user(self, name, channel_id, real_name, tz):
-        if self.users.find(channel_id) is None:
-            self.users.append(User(self, name, channel_id, real_name, tz))
+    def attach_user(self, name, user_id, real_name, tz):
+        self.users.update({user_id: User(self, name, user_id, real_name, tz)})
 
     def attach_channel(self, name, channel_id, members=None):
         if members is None:
@@ -160,7 +174,7 @@ class Server(object):
         if self.channels.find(channel_id) is None:
             self.channels.append(Channel(self, name, channel_id, members))
 
-    def join_channel(self, name):
+    def join_channel(self, name, timeout=None):
         '''
         Join a channel by name.
 
@@ -168,16 +182,18 @@ class Server(object):
         '''
         return self.api_requester.do(
             self.token,
-            "channels.join?name={}".format(name)
+            "channels.join?name={}".format(name),
+            timeout=timeout
         ).text
 
-    def api_call(self, method, **kwargs):
+    def api_call(self, method, timeout=None, **kwargs):
         '''
         Call the Slack Web API as documented here: https://api.slack.com/web
 
         :Args:
             method (str): The API Method to call. See here for a list: https://api.slack.com/methods
         :Kwargs:
+            (optional) timeout: stop waiting for a response after a given number of seconds
             (optional) kwargs: any arguments passed here will be bundled and sent to the api
             requester as post_data
                 and will be passed along to the API.
@@ -201,7 +217,11 @@ class Server(object):
 
             See here for more information on responses: https://api.slack.com/web
         '''
-        return self.api_requester.do(self.token, method, kwargs).text
+        return self.api_requester.do(self.token, method, kwargs, timeout=timeout).text
+
+
+class SlackCongigurationError(Exception):
+    pass
 
 
 class SlackConnectionError(Exception):
